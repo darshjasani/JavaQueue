@@ -2,20 +2,28 @@ package com.example.worker;
 
 import com.example.model.Task;
 import com.example.model.TaskStatus;
+import com.example.queue.DeadLetterQueue;
 import com.example.queue.TaskQueue;
+import com.example.retry.RetryStrategy;
+import java.time.Duration;
 import java.util.Map;
 
 public class Worker implements Runnable {
     
     private final String workerId;
     private final TaskQueue taskQueue;
+    private final DeadLetterQueue dlq;
     private final Map<String, TaskHandler> handlers;
+    private final RetryStrategy retryStrategy;
     private volatile boolean running = true;
 
-    public Worker(String workerId, TaskQueue taskQueue, Map<String, TaskHandler> handlers) {
+    public Worker(String workerId, TaskQueue taskQueue, DeadLetterQueue dlq,
+                  Map<String, TaskHandler> handlers, RetryStrategy retryStrategy) {
         this.workerId = workerId;
         this.taskQueue = taskQueue;
+        this.dlq = dlq;
         this.handlers = handlers;
+        this.retryStrategy = retryStrategy;
     }
 
     @Override
@@ -24,10 +32,8 @@ public class Worker implements Runnable {
         
         while (running) {
             try {
-                // Wait for next task
                 Task task = taskQueue.poll();
                 processTask(task);
-                
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
                 break;
@@ -41,18 +47,16 @@ public class Worker implements Runnable {
         System.out.println("[" + workerId + "] Processing: " + task);
         task.setStatus(TaskStatus.PROCESSING);
 
-        // Find handler for this task type
         TaskHandler handler = handlers.get(task.getType());
         
         if (handler == null) {
-            System.err.println("[" + workerId + "] No handler for type: " + task.getType());
             task.setStatus(TaskStatus.FAILED);
-            task.setErrorMessage("No handler found for type: " + task.getType());
+            task.setErrorMessage("No handler for type: " + task.getType());
+            dlq.add(task);
             return;
         }
 
         try {
-            // Execute the task
             handler.handle(task);
             task.setStatus(TaskStatus.COMPLETED);
             System.out.println("[" + workerId + "] Completed: " + task);
@@ -64,16 +68,28 @@ public class Worker implements Runnable {
 
     private void handleFailure(Task task, Exception e) {
         task.incrementRetry();
+        task.setErrorMessage(e.getMessage());
         
-        if (task.canRetry()) {
-            System.out.println("[" + workerId + "] Task failed, retrying... " + task);
+        if (retryStrategy.shouldRetry(task.getRetryCount(), task.getMaxRetries())) {
+            // Calculate backoff delay
+            Duration delay = retryStrategy.getDelay(task.getRetryCount());
+            System.out.println("[" + workerId + "] Task failed, retry in " + 
+                             delay.toMillis() + "ms... " + task);
+            
+            // Wait before requeue (backoff)
+            try {
+                Thread.sleep(delay.toMillis());
+            } catch (InterruptedException ie) {
+                Thread.currentThread().interrupt();
+            }
+            
             task.setStatus(TaskStatus.PENDING);
-            taskQueue.submit(task); // Re-queue for retry
+            taskQueue.submit(task);
         } else {
+            // Max retries reached → send to DLQ
             System.err.println("[" + workerId + "] Task failed permanently: " + task);
             task.setStatus(TaskStatus.FAILED);
-            task.setErrorMessage(e.getMessage());
-            // TODO: Send to Dead Letter Queue (Day 2)
+            dlq.add(task);
         }
     }
 
