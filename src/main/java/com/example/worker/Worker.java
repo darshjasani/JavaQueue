@@ -3,7 +3,7 @@ package com.example.worker;
 import com.example.model.Task;
 import com.example.model.TaskStatus;
 import com.example.queue.DeadLetterQueue;
-import com.example.queue.TaskQueue;
+import com.example.queue.PersistentTaskQueue;
 import com.example.retry.RetryStrategy;
 import java.time.Duration;
 import java.util.Map;
@@ -11,13 +11,13 @@ import java.util.Map;
 public class Worker implements Runnable {
     
     private final String workerId;
-    private final TaskQueue taskQueue;
+    private final PersistentTaskQueue taskQueue;
     private final DeadLetterQueue dlq;
     private final Map<String, TaskHandler> handlers;
     private final RetryStrategy retryStrategy;
     private volatile boolean running = true;
 
-    public Worker(String workerId, TaskQueue taskQueue, DeadLetterQueue dlq,
+    public Worker(String workerId, PersistentTaskQueue taskQueue, DeadLetterQueue dlq,
                   Map<String, TaskHandler> handlers, RetryStrategy retryStrategy) {
         this.workerId = workerId;
         this.taskQueue = taskQueue;
@@ -46,12 +46,14 @@ public class Worker implements Runnable {
     private void processTask(Task task) {
         System.out.println("[" + workerId + "] Processing: " + task);
         task.setStatus(TaskStatus.PROCESSING);
+        taskQueue.updateTask(task);
 
         TaskHandler handler = handlers.get(task.getType());
         
         if (handler == null) {
             task.setStatus(TaskStatus.FAILED);
             task.setErrorMessage("No handler for type: " + task.getType());
+            taskQueue.updateTask(task);
             dlq.add(task);
             return;
         }
@@ -59,6 +61,7 @@ public class Worker implements Runnable {
         try {
             handler.handle(task);
             task.setStatus(TaskStatus.COMPLETED);
+            taskQueue.removeTask(task.getId()); // Remove from DB when done
             System.out.println("[" + workerId + "] Completed: " + task);
             
         } catch (Exception e) {
@@ -71,12 +74,10 @@ public class Worker implements Runnable {
         task.setErrorMessage(e.getMessage());
         
         if (retryStrategy.shouldRetry(task.getRetryCount(), task.getMaxRetries())) {
-            // Calculate backoff delay
             Duration delay = retryStrategy.getDelay(task.getRetryCount());
             System.out.println("[" + workerId + "] Task failed, retry in " + 
                              delay.toMillis() + "ms... " + task);
             
-            // Wait before requeue (backoff)
             try {
                 Thread.sleep(delay.toMillis());
             } catch (InterruptedException ie) {
@@ -86,9 +87,9 @@ public class Worker implements Runnable {
             task.setStatus(TaskStatus.PENDING);
             taskQueue.submit(task);
         } else {
-            // Max retries reached → send to DLQ
             System.err.println("[" + workerId + "] Task failed permanently: " + task);
             task.setStatus(TaskStatus.FAILED);
+            taskQueue.updateTask(task);
             dlq.add(task);
         }
     }

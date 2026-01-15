@@ -1,11 +1,11 @@
 package com.example;
 
 import com.example.api.TaskServer;
+import com.example.db.DatabaseManager;
 import com.example.handlers.EmailTaskHandler;
 import com.example.handlers.ReportTaskHandler;
 import com.example.queue.DeadLetterQueue;
-import com.example.queue.InMemoryTaskQueue;
-import com.example.queue.TaskQueue;
+import com.example.queue.PersistentTaskQueue;
 import com.example.worker.WorkerPool;
 
 public class App {
@@ -15,24 +15,30 @@ public class App {
         System.out.println("       JAVAQUEUE - Task Queue System       ");
         System.out.println("===========================================\n");
 
-        // 1. Create queue and DLQ
-        TaskQueue taskQueue = new InMemoryTaskQueue();
+        // 1. Initialize database
+        DatabaseManager db = new DatabaseManager();
+        db.init();
+
+        // 2. Create persistent queue and DLQ
+        PersistentTaskQueue taskQueue = new PersistentTaskQueue(db);
         DeadLetterQueue dlq = new DeadLetterQueue();
 
-        // 2. Create and start worker pool
+        // 3. Create and start worker pool
         WorkerPool pool = new WorkerPool(3, taskQueue, dlq);
         pool.registerHandler(new EmailTaskHandler());
         pool.registerHandler(new ReportTaskHandler());
         pool.start();
 
-        // 3. Start REST API server (starts automatically in constructor)
+        // 4. Start REST API server
         TaskServer server = new TaskServer(8080, taskQueue, dlq);
 
-        // 4. Shutdown hook for graceful exit (Ctrl+C)
+        // 5. Shutdown hook for graceful exit (Ctrl+C)
         Runtime.getRuntime().addShutdownHook(new Thread(() -> {
             System.out.println("\n--- Shutting Down ---");
             server.stop();
             pool.shutdown();
+            taskQueue.shutdown();
+            try { db.close(); } catch (Exception e) { }
             dlq.printSummary();
         }));
 

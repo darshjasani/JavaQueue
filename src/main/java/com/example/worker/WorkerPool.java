@@ -1,7 +1,7 @@
 package com.example.worker;
 
 import com.example.queue.DeadLetterQueue;
-import com.example.queue.TaskQueue;
+import com.example.queue.PersistentTaskQueue;
 import com.example.retry.ExponentialBackoff;
 import com.example.retry.RetryStrategy;
 import java.util.ArrayList;
@@ -15,34 +15,31 @@ import java.util.concurrent.TimeUnit;
 public class WorkerPool {
     
     private final int poolSize;
-    private final TaskQueue taskQueue;
+    private final PersistentTaskQueue taskQueue;
     private final DeadLetterQueue dlq;
     private final Map<String, TaskHandler> handlers;
     private final List<Worker> workers;
     private final RetryStrategy retryStrategy;
     private ExecutorService executor;
 
-    public WorkerPool(int poolSize, TaskQueue taskQueue, DeadLetterQueue dlq) {
+    public WorkerPool(int poolSize, PersistentTaskQueue taskQueue, DeadLetterQueue dlq) {
         this.poolSize = poolSize;
         this.taskQueue = taskQueue;
         this.dlq = dlq;
         this.handlers = new HashMap<>();
         this.workers = new ArrayList<>();
-        this.retryStrategy = new ExponentialBackoff(); // Default strategy
+        this.retryStrategy = new ExponentialBackoff();
     }
 
-    // Register a handler for a task type
     public void registerHandler(TaskHandler handler) {
         handlers.put(handler.getTaskType(), handler);
         System.out.println("[POOL] Registered handler for: " + handler.getTaskType());
     }
 
-    // Get DLQ for monitoring
     public DeadLetterQueue getDeadLetterQueue() {
         return dlq;
     }
 
-    // Start all workers
     public void start() {
         System.out.println("[POOL] Starting " + poolSize + " workers...");
         executor = Executors.newFixedThreadPool(poolSize);
@@ -56,7 +53,6 @@ public class WorkerPool {
         System.out.println("[POOL] All workers started!");
     }
 
-    // Graceful shutdown
     public void shutdown() {
         System.out.println("[POOL] Shutting down...");
         

@@ -2,17 +2,17 @@ package com.example.api;
 
 import com.example.model.Task;
 import com.example.queue.DeadLetterQueue;
-import com.example.queue.TaskQueue;
+import com.example.queue.PersistentTaskQueue;
 import io.javalin.Javalin;
 import io.javalin.http.Context;
 
 public class TaskServer {
 
     private final Javalin app;
-    private final TaskQueue taskQueue;
+    private final PersistentTaskQueue taskQueue;
     private final DeadLetterQueue dlq;
 
-    public TaskServer(int port, TaskQueue taskQueue, DeadLetterQueue dlq) {
+    public TaskServer(int port, PersistentTaskQueue taskQueue, DeadLetterQueue dlq) {
         this.taskQueue = taskQueue;
         this.dlq = dlq;
         
@@ -37,17 +37,19 @@ public class TaskServer {
         System.out.println("[API] Server stopped");
     }
 
-    // POST /tasks/submit
+    // POST /tasks/submit - supports optional delay in seconds
     private void handleSubmit(Context ctx) {
         String type = ctx.formParam("type");
         String payload = ctx.formParam("payload");
+        String delayStr = ctx.formParam("delay");
         
-        // Also try JSON body
+        // Try JSON body
         if (type == null) {
             try {
                 var json = ctx.bodyAsClass(TaskRequest.class);
                 type = json.type;
                 payload = json.payload;
+                delayStr = json.delay;
             } catch (Exception e) {
                 ctx.status(400).json(new Response("error", "Invalid request"));
                 return;
@@ -60,8 +62,22 @@ public class TaskServer {
         }
 
         Task task = new Task(type, payload != null ? payload : "");
-        taskQueue.submit(task);
         
+        // Check for delay
+        if (delayStr != null && !delayStr.isEmpty()) {
+            try {
+                long delay = Long.parseLong(delayStr);
+                taskQueue.submitDelayed(task, delay);
+                ctx.status(201).json(new SubmitResponse("success", 
+                    "Task scheduled (delay: " + delay + "s)", task.getId()));
+                return;
+            } catch (NumberFormatException e) {
+                ctx.status(400).json(new Response("error", "Invalid delay value"));
+                return;
+            }
+        }
+        
+        taskQueue.submit(task);
         ctx.status(201).json(new SubmitResponse("success", "Task submitted", task.getId()));
     }
 
@@ -80,8 +96,8 @@ public class TaskServer {
         ctx.json(new HealthResponse("healthy", taskQueue.size(), dlq.size()));
     }
 
-    // Simple DTOs for JSON
-    record TaskRequest(String type, String payload) {}
+    // DTOs
+    record TaskRequest(String type, String payload, String delay) {}
     record Response(String status, String message) {}
     record SubmitResponse(String status, String message, String taskId) {}
     record HealthResponse(String status, int pendingTasks, int deadTasks) {}
