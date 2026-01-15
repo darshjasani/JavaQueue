@@ -1,5 +1,6 @@
 package com.example.worker;
 
+import com.example.metrics.MetricsCollector;
 import com.example.model.Task;
 import com.example.model.TaskStatus;
 import com.example.queue.DeadLetterQueue;
@@ -15,6 +16,7 @@ public class Worker implements Runnable {
     private final DeadLetterQueue dlq;
     private final Map<String, TaskHandler> handlers;
     private final RetryStrategy retryStrategy;
+    private final MetricsCollector metrics = MetricsCollector.getInstance();
     private volatile boolean running = true;
 
     public Worker(String workerId, PersistentTaskQueue taskQueue, DeadLetterQueue dlq,
@@ -44,6 +46,7 @@ public class Worker implements Runnable {
     }
 
     private void processTask(Task task) {
+        long startTime = System.currentTimeMillis();
         System.out.println("[" + workerId + "] Processing: " + task);
         task.setStatus(TaskStatus.PROCESSING);
         taskQueue.updateTask(task);
@@ -55,14 +58,17 @@ public class Worker implements Runnable {
             task.setErrorMessage("No handler for type: " + task.getType());
             taskQueue.updateTask(task);
             dlq.add(task);
+            metrics.recordFailure();
             return;
         }
 
         try {
             handler.handle(task);
+            long duration = System.currentTimeMillis() - startTime;
             task.setStatus(TaskStatus.COMPLETED);
-            taskQueue.removeTask(task.getId()); // Remove from DB when done
-            System.out.println("[" + workerId + "] Completed: " + task);
+            taskQueue.removeTask(task.getId());
+            metrics.recordSuccess(duration);
+            System.out.println("[" + workerId + "] Completed: " + task + " (" + duration + "ms)");
             
         } catch (Exception e) {
             handleFailure(task, e);
@@ -91,6 +97,7 @@ public class Worker implements Runnable {
             task.setStatus(TaskStatus.FAILED);
             taskQueue.updateTask(task);
             dlq.add(task);
+            metrics.recordFailure();
         }
     }
 
