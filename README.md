@@ -1,6 +1,6 @@
 # JavaQueue
 
-A lightweight, resilient task queue system built in Java 21 featuring concurrent worker pools, exponential backoff retry, dead letter queue, persistence, and REST API.
+A lightweight, resilient task queue system built in Java 21 featuring concurrent worker pools, exponential backoff retry, dead letter queue, persistence, REST API, and real-time metrics dashboard.
 
 ## Features
 
@@ -10,7 +10,17 @@ A lightweight, resilient task queue system built in Java 21 featuring concurrent
 - **Persistence** - Tasks survive restarts using H2 database
 - **Delayed Tasks** - Schedule tasks to execute later
 - **REST API** - Submit and monitor tasks via HTTP endpoints
+- **Real-time Dashboard** - Web UI for monitoring and task submission
+- **Metrics Tracking** - Success rate, avg processing time, uptime stats
 - **Graceful Shutdown** - Clean shutdown with Ctrl+C
+
+## Screenshots
+
+Dashboard available at `http://localhost:8080`:
+- Live metrics (submitted, completed, failed, success rate)
+- Submit tasks with optional delay
+- View pending tasks and DLQ in real-time
+- Auto-refreshes every 2 seconds
 
 ## Architecture
 
@@ -27,9 +37,10 @@ A lightweight, resilient task queue system built in Java 21 featuring concurrent
                      └─────────────────┘     └──────┬───────┘
                                                     │
                                                     ▼
-                                            ┌──────────────┐
-                                            │ Dead Letter Q│
-                                            └──────────────┘
+                     ┌─────────────────┐     ┌──────────────┐
+                     │    Dashboard    │     │ Dead Letter Q│
+                     │   (Metrics UI)  │     │              │
+                     └─────────────────┘     └──────────────┘
 ```
 
 ## Project Structure
@@ -38,9 +49,11 @@ A lightweight, resilient task queue system built in Java 21 featuring concurrent
 src/main/java/com/example/
 ├── App.java                    # Entry point
 ├── api/
-│   └── TaskServer.java         # REST API endpoints
+│   └── TaskServer.java         # REST API + Dashboard
 ├── db/
 │   └── DatabaseManager.java    # H2 database operations
+├── metrics/
+│   └── MetricsCollector.java   # Stats tracking
 ├── model/
 │   ├── Task.java               # Task entity
 │   └── TaskStatus.java         # Status enum
@@ -85,17 +98,17 @@ mvn clean install
 mvn exec:java -Dexec.mainClass="com.example.App"
 ```
 
-### Verify
+### Open Dashboard
 
-```bash
-curl http://localhost:8080/health
-```
+Visit http://localhost:8080 in your browser.
 
 ## API Endpoints
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
+| GET | `/` | Dashboard UI |
 | GET | `/health` | Health check with queue stats |
+| GET | `/metrics` | Metrics JSON |
 | POST | `/tasks/submit` | Submit a new task |
 | GET | `/tasks` | View pending tasks |
 | GET | `/dlq` | View dead letter queue |
@@ -113,7 +126,6 @@ curl -X POST http://localhost:8080/tasks/submit \
 ### Submit Delayed Task
 
 ```bash
-# Execute after 30 seconds
 curl -X POST http://localhost:8080/tasks/submit \
   -H "Content-Type: application/json" \
   -d '{"type":"email","payload":"user@example.com","delay":"30"}'
@@ -125,14 +137,27 @@ curl -X POST http://localhost:8080/tasks/submit \
 curl http://localhost:8080/health
 ```
 
+### Get Metrics
+
+```bash
+curl http://localhost:8080/metrics
+```
+
 Response:
 ```json
-{"status":"healthy","pendingTasks":0,"deadTasks":0}
+{
+  "submitted": 10,
+  "completed": 8,
+  "failed": 1,
+  "successRate": 88.9,
+  "avgProcessingMs": 1250.5,
+  "uptimeSeconds": 3600
+}
 ```
 
 ## How It Works
 
-1. **Submit** - Task received via REST API
+1. **Submit** - Task received via REST API or Dashboard
 2. **Persist** - Task saved to H2 database
 3. **Queue** - Task added to in-memory queue (or waits if delayed)
 4. **Process** - Worker picks up and executes task
@@ -152,6 +177,17 @@ Response:
 ### Persistence
 
 Tasks are stored in `./data/javaqueue.mv.db`. On restart, pending tasks automatically resume processing.
+
+### Metrics
+
+| Metric | Description |
+|--------|-------------|
+| Submitted | Total tasks submitted |
+| Completed | Successfully processed tasks |
+| Failed | Tasks that failed permanently |
+| Success Rate | Completed / (Completed + Failed) |
+| Avg Time | Average processing time in ms |
+| Uptime | Server uptime |
 
 ## Adding Custom Handlers
 
@@ -174,7 +210,3 @@ Register in `App.java`:
 ```java
 pool.registerHandler(new MyTaskHandler());
 ```
-
-## License
-
-MIT
